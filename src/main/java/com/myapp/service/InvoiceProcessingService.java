@@ -23,6 +23,8 @@ public class InvoiceProcessingService {
     private final CsvGeneratorService csvGeneratorService;
     private final FileTransactionRepository fileTransactionRepository;
     private final InvoiceRepository invoiceRepository;
+    // Add to constructor injection
+    private final EmailService emailService;
 
     /**
      * Step 1: Create transaction record and kick off async processing.
@@ -80,9 +82,31 @@ public class InvoiceProcessingService {
             log.info("[Stage 5] Uploading CSV to S3: {}", outputFileName);
             s3Service.uploadFileToS3(outputFileName, csvBytes);
 
-            // ── Done: Mark SUCCESS ───────────────────────────────
+            // ── Mark SUCCESS after upload ─────────────────────────
             updateStatusWithOutput(transactionId, FileStatus.SUCCESS, outputFileName);
-            log.info("Processing completed successfully | transactionId={}", transactionId);
+            log.info("Invoice processed successfully. Moving to notification stage.");
+
+            // ── Stage 6: Send Email Notification ─────────────
+            log.info("[Stage 6] Sending email notification");
+            boolean emailSent = emailService.sendProcessingCompleteEmail(
+                    invoice.getCustomerEmail(),
+                    invoice.getVendorEmail(),
+                    invoice.getInvoiceNumber(),
+                    invoice.getVendorName(),
+                    outputFileName,
+                    transactionId
+            );
+
+            // ── Stage 7: Update final status based on email result ───
+            if (emailSent) {
+                updateStatus(transactionId, FileStatus.NOTIFICATION_SENT, null);
+                log.info("[Stage 7] Status updated to NOTIFICATION_SENT | transactionId={}", transactionId);
+            } else {
+                updateStatus(transactionId, FileStatus.NOTIFICATION_FAILED_TO_SEND,
+                        "Email notification could not be delivered.");
+                log.warn("[Stage 7] Status updated to NOTIFICATION_FAILED_TO_SEND | transactionId={}", transactionId);
+            }
+
 
         } catch (Exception e) {
             log.error("Processing failed | transactionId={} | error={}", transactionId, e.getMessage(), e);
@@ -102,6 +126,8 @@ public class InvoiceProcessingService {
 
     @Transactional
     private void saveInvoice(String transactionId, Invoice invoice) {
+        log.info("Saving invoice → customerEmail={} | vendorEmail={}",
+                invoice.getCustomerEmail(), invoice.getVendorEmail());
         FileTransaction transaction = fileTransactionRepository
                 .findByTransactionId(transactionId)
                 .orElseThrow(() -> new RuntimeException("Transaction not found"));

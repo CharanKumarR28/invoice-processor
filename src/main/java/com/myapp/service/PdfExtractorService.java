@@ -70,6 +70,9 @@ public class PdfExtractorService {
         // Extract Line Items — looks for rows like: "Item description  2  500.00  1000.00"
         invoice.setLineItems(extractLineItems(text, invoice));
 
+        // Extract emails
+        extractEmails(text, invoice);
+
         log.info("Parsed invoice: number={}, vendor={}, total={}",
                 invoice.getInvoiceNumber(), invoice.getVendorName(), invoice.getTotalAmount());
 
@@ -146,5 +149,117 @@ public class PdfExtractorService {
         } catch (Exception e) {
             return BigDecimal.ZERO;
         }
+    }
+
+    private void extractEmails(String text, Invoice invoice) {
+        try {
+            // Clean text before matching
+            String cleanedText = text
+                    .replaceAll("\\s+@", "@")
+                    .replaceAll("@\\s+", "@")
+                    .replaceAll("\\s+\\.", ".")
+                    .replaceAll("\\.\\s+", ".");
+
+            Pattern emailPattern = Pattern.compile(
+                    "[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}"
+            );
+            Matcher matcher = emailPattern.matcher(cleanedText);
+
+            List<String> allEmails = new ArrayList<>();
+            while (matcher.find()) {
+                allEmails.add(matcher.group());
+            }
+
+            log.info("Emails found in PDF: {}", allEmails);
+
+            // ── Try context matching first ───────────────────────────
+            for (String email : allEmails) {
+                String context = extractContextAroundEmail(cleanedText, email).toLowerCase();
+                log.info("Context around {}: {}", email, context);   // ← see what context looks like
+
+                boolean isVendor = context.contains("vendor") ||
+                        context.contains("supplier") ||
+                        context.contains("seller") ||
+                        context.contains("accounts") ||
+                        context.contains("from") ||
+                        context.contains("billing");
+
+                boolean isClient = context.contains("client") ||
+                        context.contains("bill to") ||
+                        context.contains("customer") ||
+                        context.contains("buyer") ||
+                        context.contains("finance") ||
+                        context.contains("purchase");
+
+                log.info("Email: {} | isVendor={} | isClient={}", email, isVendor, isClient);
+
+                if (isVendor && invoice.getVendorEmail() == null) {
+                    invoice.setVendorEmail(email);
+                    log.info("Vendor email set: {}", email);
+                } else if (isClient && invoice.getCustomerEmail() == null) {
+                    invoice.setCustomerEmail(email);
+                    log.info("Customer email set: {}", email);
+                }
+            }
+
+            // ── Fallback 1: only one email found ─────────────────────
+            if (allEmails.size() == 1
+                    && invoice.getCustomerEmail() == null
+                    && invoice.getVendorEmail() == null) {
+                invoice.setCustomerEmail(allEmails.get(0));
+                log.warn("Single email fallback → customer: {}", allEmails.get(0));
+            }
+
+            // ── Fallback 2: two emails, context failed for both ──────
+            if (allEmails.size() >= 2
+                    && invoice.getVendorEmail() == null
+                    && invoice.getCustomerEmail() == null) {
+                invoice.setVendorEmail(allEmails.get(0));
+                invoice.setCustomerEmail(allEmails.get(1));
+                log.warn("Context failed. Fallback assign → vendor={} | customer={}",
+                        allEmails.get(0), allEmails.get(1));
+            }
+
+            // ── Fallback 3: one assigned, one missing ────────────────
+            if (allEmails.size() >= 2 && invoice.getVendorEmail() != null
+                    && invoice.getCustomerEmail() == null) {
+                for (String email : allEmails) {
+                    if (!email.equalsIgnoreCase(invoice.getVendorEmail())) {
+                        invoice.setCustomerEmail(email);
+                        log.warn("Customer email from remaining → {}", email);
+                        break;
+                    }
+                }
+            }
+
+            if (allEmails.size() >= 2 && invoice.getCustomerEmail() != null
+                    && invoice.getVendorEmail() == null) {
+                for (String email : allEmails) {
+                    if (!email.equalsIgnoreCase(invoice.getCustomerEmail())) {
+                        invoice.setVendorEmail(email);
+                        log.warn("Vendor email from remaining → {}", email);
+                        break;
+                    }
+                }
+            }
+
+            log.info("Final email assignment → customerEmail={} | vendorEmail={}",
+                    invoice.getCustomerEmail(), invoice.getVendorEmail());
+
+        } catch (Exception e) {
+            log.warn("Could not extract emails: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Get ~100 characters of text surrounding the email
+     * to understand its context (vendor vs customer)
+     */
+    private String extractContextAroundEmail(String text, String email) {
+        int index = text.indexOf(email);
+        if (index == -1) return "";
+        int start = Math.max(0, index - 100);
+        int end   = Math.min(text.length(), index + 100);
+        return text.substring(start, end);
     }
 }

@@ -43,4 +43,10 @@ public class Invoice {
 
     @OneToMany(mappedBy = "invoice", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     private List<InvoiceLineItem> lineItems;
+
+    @Column(name = "customer_email")
+    private String customerEmail;
+
+    @Column(name = "vendor_email")
+    private String vendorEmail;
 }

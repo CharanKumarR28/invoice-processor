@@ -247,3 +247,9 @@ Total Amount: 16500.00
 
 ## Author
 Built with Spring Boot 2.7.18 + Java 8 + Gradle + MySQL + AWS S3
+
+
+#FILE REGEX
+
+What your Regex expects vs What this PDF has
+FieldYour Regex looks forThis PDF hasInvoice NumberInvoice No: / Invoice #:Invoice IDVendor NameVendor: / From:Vendor NameTotal AmountTotal Amount: / Amount Due:Grand TotalDateYYYY-MM-DD or DD/MM/YYYY28-May-2026CurrencyUSD/INR/EUR etcEUR ✅ works
